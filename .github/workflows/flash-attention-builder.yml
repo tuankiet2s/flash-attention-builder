@@ -49,24 +49,21 @@ jobs:
       matrix:
         os: ["windows-2022", "ubuntu-22.04"]
         pyver: ["3.10", "3.11", "3.12", "3.13"]
-        cuda: ["12.4.1", "12.8.1"]
+        cuda: ["12.1.1", "12.4.1"]
         torchver: ${{ fromJson(needs.setup.outputs.torchver-matrix) }}
         exclude:
         #   - os: "windows-2022"
           - torchver: '2.5.1'
             pyver: '3.13'
-          - torchver: '2.7.0'
-            cuda: '12.4.1'
-          - torchver: '2.5.1'
-            cuda: '12.8.1'
           - torchver: '2.6.0'
-            cuda: '12.8.1'
+            pyver: '3.13'
+          - torchver: '2.7.0'
+            pyver: '3.13'
+          # Reduce Ubuntu builds to focus on stable combinations
           - os: 'ubuntu-22.04'
-            torchver: '2.5.1'
+            torchver: '2.1.1'
           - os: 'ubuntu-22.04'
-            torchver: '2.6.0'
-          - os: 'ubuntu-22.04'
-            cuda: '12.4.1'
+            cuda: '12.1.1'
     defaults:
       run:
         shell: pwsh
@@ -104,7 +101,7 @@ jobs:
           cuda: "${{ matrix.cuda }}"
           linux-local-args: '["--toolkit"]'
           method: "network"
-          sub-packages: '["nvcc"]'
+          sub-packages: '["nvcc", "cudart", "cublas", "cufft", "curand", "cusolver", "cusparse"]'
         if: runner.os != 'Windows'
 
       - name: Install the latest version of uv and set the python version
@@ -119,7 +116,7 @@ jobs:
           $cudaVersionPytorch = '${{ matrix.cuda }}'.Remove('${{ matrix.cuda }}'.LastIndexOf('.')).Replace('.','')
           $pytorchIndexUrl = "https://download.pytorch.org/whl/cu$cudaVersionPytorch"
 
-          uv pip install --upgrade build setuptools wheel packaging ninja torch==${{ matrix.torchver }} psutil --extra-index-url $pytorchIndexUrl
+          uv pip install --upgrade build setuptools wheel packaging ninja numpy torch==${{ matrix.torchver }} psutil --extra-index-url $pytorchIndexUrl
 
       - name: Build Wheel
         id: build-wheel
@@ -135,19 +132,39 @@ jobs:
           $cudaVersion = $env:CUDAVER.Remove($env:CUDAVER.LastIndexOf('.')).Replace('.','')
           $packageVersion = $env:PCKGVER.TrimStart('v')
           
-          $env:CUDA_PATH = $env:CONDA_PREFIX
-          $env:CUDA_HOME = $env:CONDA_PREFIX
+          # Set CUDA paths properly
+          if ($IsWindows) {
+            $env:CUDA_PATH = $env:CUDA_PATH
+            $env:CUDA_HOME = $env:CUDA_PATH
+          } else {
+            $env:CUDA_HOME = "/usr/local/cuda-${{ matrix.cuda }}"
+            $env:CUDA_PATH = "/usr/local/cuda-${{ matrix.cuda }}"
+          }
           
           $env:MAX_JOBS = '1'
           $env:FLASH_ATTENTION_FORCE_BUILD = 'TRUE'
           $env:FLASH_ATTENTION_FORCE_CXX11_ABI = 'FALSE'
           $env:BUILD_TARGET = "cuda"
 
+          # Create dist directory if it doesn't exist
+          if (!(Test-Path "dist")) {
+            New-Item -ItemType Directory -Path "dist"
+          }
+
+          Write-Output "Building wheel with CUDA $cudaVersion and PyTorch ${{ matrix.torchver }}"
           python setup.py bdist_wheel --dist-dir=dist
           
-          $wheel = (gi '.\dist\*.whl')[0]
+          # Check if wheel was created
+          $wheels = Get-ChildItem -Path ".\dist\" -Filter "*.whl"
+          if ($wheels.Count -eq 0) {
+            Write-Error "No wheel file was created"
+            exit 1
+          }
+          
+          $wheel = $wheels[0]
           $wheelname = $wheel.name.replace("flash_attn-$packageVersion-","flash_attn-$packageVersion+cu$cudaVersion"+"torch${{ matrix.torchver }}cxx11abiFALSE-")
           Move-Item $wheel.fullname ".\dist\$wheelname"
+          Write-Output "Created wheel: $wheelname"
           
       - name: Upload files to a GitHub release
         uses: svenstaro/upload-release-action@2.6.1
