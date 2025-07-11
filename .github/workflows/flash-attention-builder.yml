@@ -8,6 +8,11 @@ on:
         default: 'v2.3.4'
         required: true
         type: string
+      torchver:
+        description: 'List of versions of torch to build: (format: 2.1.1,2.5.1,2.6.0,2.7.0)'
+        default: '2.1.1,2.5.1,2.6.0,2.7.0'
+        required: true
+        type: string
   workflow_call:
     inputs:
       version:
@@ -15,12 +20,28 @@ on:
         default: 'v2.3.4'
         required: true
         type: string
-
+      torchver:
+        description: 'List of versions of torch to build: (format: 2.1.1,2.5.1,2.6.0,2.7.0)'
+        default: '2.1.1,2.5.1,2.6.0,2.7.0'
+        required: true
+        type: string
 permissions:
   contents: write
 
 jobs:
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      torchver-matrix: ${{ steps.set-matrix.outputs.torchver-matrix }}
+    steps:
+      - id: set-matrix
+        run: |
+          torchver_input="${{ inputs.torchver }}"
+          torchver_array=$(echo "$torchver_input" | sed 's/,/","/g' | sed 's/^/"/' | sed 's/$/"/')
+          echo "torchver-matrix=[$torchver_array]" >> $GITHUB_OUTPUT
+
   build_wheels:
+    needs: setup
     name: Build wheels for OS ${{ matrix.os }}, Python ${{ matrix.pyver }}, CUDA ${{ matrix.cuda }}, and Torch ${{ matrix.torchver }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -29,9 +50,9 @@ jobs:
         os: ["windows-2022", "ubuntu-22.04"]
         pyver: ["3.10", "3.11", "3.12", "3.13"]
         cuda: ["12.4.1", "12.8.1"]
-        torchver: ["2.5.1", "2.6.0", "2.7.0"]
+        torchver: ${{ fromJson(needs.setup.outputs.torchver-matrix) }}
         exclude:
-          - os: "windows-2022"
+        #   - os: "windows-2022"
           - torchver: '2.5.1'
             pyver: '3.13'
           - torchver: '2.7.0'
