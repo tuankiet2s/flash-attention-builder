@@ -11,7 +11,7 @@ on:
       cuda_version:
         description: 'CUDA version'
         required: true
-        default: '12.4.1'
+        default: '12.1.1'
         type: choice
         options:
           - '11.8.0'
@@ -19,9 +19,6 @@ on:
           - '12.2.2'
           - '12.3.2'
           - '12.4.1'
-          - '12.5.1'
-          - '12.6.2'
-          - '12.8.1'
 
 permissions:
   contents: write
@@ -30,34 +27,32 @@ jobs:
   build:
     name: Build FA ${{ inputs.version }} CUDA ${{ inputs.cuda_version }} on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, windows-2022]
-        python: ["3.10", "3.11", "3.12"]
-        torch: ["2.4.1", "2.5.1", "2.6.0"]
+        os: [ubuntu-22.04]
+        python: ["3.10", "3.11"]
+        torch: ["2.4.1", "2.5.1"]
         exclude:
-          # Reduce Windows combinations
-          - os: windows-2022
-            python: "3.12"
-          - os: windows-2022
-            torch: "2.4.1"
+          # Skip problematic combinations for now
+          - python: "3.12"
+          - torch: "2.6.0"
     
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Enable Git Long Paths (Windows)
-        if: runner.os == 'Windows'
+      - name: Free Disk Space
         run: |
-          git config --global core.longpaths true
-          git config --global core.autocrlf false
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf "/usr/local/share/boost"
+          sudo rm -rf "$AGENT_TOOLSDIRECTORY"
 
       - name: Clone Flash Attention ${{ inputs.version }}
-        shell: bash
         run: |
           echo "Cloning flash-attention ${{ inputs.version }}..."
-          git config --global core.longpaths true
           git clone --depth 1 --branch ${{ inputs.version }} https://github.com/Dao-AILab/flash-attention.git fa-src
           cd fa-src
           echo "Updating submodules..."
@@ -69,24 +64,19 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
-      - name: Install CUDA ${{ inputs.cuda_version }} (Windows)
-        if: runner.os == 'Windows'
+      - name: Install CUDA ${{ inputs.cuda_version }}
         uses: Jimver/cuda-toolkit@v0.2.23
         with:
           cuda: ${{ inputs.cuda_version }}
           method: network
-          sub-packages: '["nvcc", "cudart", "cublas", "visual_studio_integration"]'
+          sub-packages: '["nvcc", "cudart", "cublas", "cufft", "curand", "cusolver", "cusparse"]'
 
-      - name: Install CUDA ${{ inputs.cuda_version }} (Linux)
-        if: runner.os == 'Linux'
-        uses: Jimver/cuda-toolkit@v0.2.23
-        with:
-          cuda: ${{ inputs.cuda_version }}
-          method: network
-          sub-packages: '["nvcc"]'
+      - name: Install System Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake
 
       - name: Install PyTorch ${{ matrix.torch }}
-        shell: bash
         run: |
           cudaVersion="${{ inputs.cuda_version }}"
           cudaShort=$(echo $cudaVersion | sed 's/\.[^.]*$//' | sed 's/\.//g')
@@ -94,25 +84,18 @@ jobs:
           pip install torch==${{ matrix.torch }} --index-url https://download.pytorch.org/whl/cu$cudaShort
 
       - name: Install Build Dependencies
-        shell: bash
         run: |
-          pip install ninja packaging wheel setuptools build psutil
-
-      - name: Install Additional Dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential
+          pip install ninja packaging wheel setuptools psutil
 
       - name: Verify Environment
-        shell: bash
         run: |
           echo "=== Environment Check ==="
-          python -c "import torch; print(f'✅ PyTorch: {torch.__version__}'); print(f'✅ CUDA available: {torch.cuda.is_available()}')"
-          nvcc --version || echo "⚠️ NVCC not found"
+          python -c "import torch; print(f'✅ PyTorch: {torch.__version__}'); print(f'✅ CUDA available: {torch.cuda.is_available()}'); print(f'✅ CUDA device count: {torch.cuda.device_count()}')"
+          nvcc --version
+          echo "PATH: $PATH"
+          echo "CUDA_HOME: $CUDA_HOME"
 
       - name: Build Flash Attention
-        shell: bash
         working-directory: fa-src
         run: |
           echo "=== Building Flash Attention ==="
@@ -120,17 +103,17 @@ jobs:
           export FLASH_ATTENTION_FORCE_BUILD=TRUE
           export FLASH_ATTENTION_FORCE_CXX11_ABI=FALSE
           export BUILD_TARGET=cuda
+          export TORCH_CUDA_ARCH_LIST="7.5;8.0;8.6;8.9;9.0"
           
-          # Set paths for CUDA
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-            export CUDA_PATH="$CUDA_PATH"
-            export CUDA_HOME="$CUDA_PATH"
-          else
-            export CUDA_PATH="$CONDA_PREFIX"
-            export CUDA_HOME="$CONDA_PREFIX"
-          fi
+          # Set CUDA paths
+          export CUDA_HOME=$CUDA_PATH
+          export PATH=$CUDA_PATH/bin:$PATH
+          export LD_LIBRARY_PATH=$CUDA_PATH/lib64:$LD_LIBRARY_PATH
           
           echo "Building with MAX_JOBS=1 to avoid memory issues..."
+          echo "CUDA_HOME: $CUDA_HOME"
+          echo "CUDA_PATH: $CUDA_PATH"
+          
           python setup.py bdist_wheel --dist-dir=dist
           
           echo "=== Build Complete ==="
