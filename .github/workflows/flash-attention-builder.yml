@@ -52,7 +52,6 @@ jobs:
         cuda: ["12.1.1", "12.4.1"]
         torchver: ${{ fromJson(needs.setup.outputs.torchver-matrix) }}
         exclude:
-        #   - os: "windows-2022"
           - torchver: '2.5.1'
             pyver: '3.13'
           - torchver: '2.6.0'
