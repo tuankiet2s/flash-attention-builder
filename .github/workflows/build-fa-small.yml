@@ -1,0 +1,92 @@
+name: Build Flash Attention (Small Matrix)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Flash attention version (e.g., v2.6.3)'
+        default: 'v2.6.3'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.os }} Python ${{ matrix.python }} CUDA ${{ matrix.cuda }} PyTorch ${{ matrix.torch }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022]
+        python: ["3.10", "3.11"]
+        cuda: ["12.1.1", "12.4.1"]
+        torch: ["2.4.1", "2.5.1"]
+        exclude:
+          # Reduce Windows builds for testing
+          - os: windows-2022
+            python: "3.11"
+          - os: windows-2022
+            cuda: "12.1.1"
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Clone flash-attention
+        shell: bash
+        run: |
+          git clone --depth 1 --branch ${{ inputs.version }} https://github.com/Dao-AILab/flash-attention.git fa-src
+          cd fa-src
+          git submodule update --init --recursive
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install CUDA (Windows)
+        if: runner.os == 'Windows'
+        uses: Jimver/cuda-toolkit@v0.2.23
+        with:
+          cuda: ${{ matrix.cuda }}
+          method: network
+
+      - name: Install CUDA (Linux)
+        if: runner.os == 'Linux'
+        uses: Jimver/cuda-toolkit@v0.2.23
+        with:
+          cuda: ${{ matrix.cuda }}
+          method: network
+          sub-packages: '["nvcc"]'
+
+      - name: Install PyTorch
+        shell: bash
+        run: |
+          cudaVersion="${{ matrix.cuda }}"
+          cudaShort=$(echo $cudaVersion | sed 's/\.[^.]*$//' | sed 's/\.//g')
+          pip install torch==${{ matrix.torch }} --index-url https://download.pytorch.org/whl/cu$cudaShort
+
+      - name: Test Environment
+        shell: bash
+        working-directory: fa-src
+        run: |
+          python -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}')"
+          pip install ninja packaging wheel setuptools
+          
+      - name: Build Flash Attention
+        shell: bash
+        working-directory: fa-src
+        run: |
+          export MAX_JOBS=2
+          export FLASH_ATTENTION_FORCE_BUILD=TRUE
+          export FLASH_ATTENTION_FORCE_CXX11_ABI=FALSE
+          python setup.py bdist_wheel --dist-dir=dist
+          ls -la dist/
+
+      - name: Upload Wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.os }}-py${{ matrix.python }}-cuda${{ matrix.cuda }}-torch${{ matrix.torch }}
+          path: fa-src/dist/*.whl 
