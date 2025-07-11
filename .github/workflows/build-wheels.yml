@@ -1,0 +1,191 @@
+name: Build flash-attention Wheels from Official Repo
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag of flash-attention to build: (format: v2.6.3/v2.7.0)'
+        default: 'v2.6.3'
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version tag of flash-attention to build (format: v2.6.3/v2.7.0)'
+        default: 'v2.6.3'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build_wheels:
+    name: Build wheels for OS ${{ matrix.os }}, Python ${{ matrix.pyver }}, CUDA ${{ matrix.cuda }}, and Torch ${{ matrix.torchver }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["windows-2022", "ubuntu-22.04"]
+        pyver: ["3.9", "3.10", "3.11", "3.12"]
+        cuda: ["11.8.0", "12.1.1", "12.2.2", "12.3.2", "12.4.1", "12.5.1", "12.6.2", "12.8.1"]
+        torchver: ["2.0.1", "2.1.2", "2.2.2", "2.3.1", "2.4.1", "2.5.1", "2.6.0", "2.7.0"]
+        exclude:
+          # Python 3.9 not supported in newer PyTorch versions
+          - torchver: '2.5.1'
+            pyver: '3.9'
+          - torchver: '2.6.0'
+            pyver: '3.9'
+          - torchver: '2.7.0'
+            pyver: '3.9'
+          # CUDA 11.8 not supported in newer PyTorch versions
+          - torchver: '2.4.1'
+            cuda: '11.8.0'
+          - torchver: '2.5.1'
+            cuda: '11.8.0'
+          - torchver: '2.6.0'
+            cuda: '11.8.0'
+          - torchver: '2.7.0'
+            cuda: '11.8.0'
+          # CUDA 12.8 only for newer PyTorch
+          - torchver: '2.0.1'
+            cuda: '12.8.1'
+          - torchver: '2.1.2'
+            cuda: '12.8.1'
+          - torchver: '2.2.2'
+            cuda: '12.8.1'
+          - torchver: '2.3.1'
+            cuda: '12.8.1'
+          - torchver: '2.4.1'
+            cuda: '12.8.1'
+          - torchver: '2.5.1'
+            cuda: '12.8.1'
+          # Newer CUDA versions only for newer PyTorch
+          - torchver: '2.0.1'
+            cuda: '12.5.1'
+          - torchver: '2.0.1'
+            cuda: '12.6.2'
+          - torchver: '2.1.2'
+            cuda: '12.5.1'
+          - torchver: '2.1.2'
+            cuda: '12.6.2'
+          # Reduce matrix size for Ubuntu (focus on common combinations)
+          - os: 'ubuntu-22.04'
+            torchver: '2.0.1'
+          - os: 'ubuntu-22.04'
+            torchver: '2.1.2'
+          - os: 'ubuntu-22.04'
+            torchver: '2.2.2'
+          - os: 'ubuntu-22.04'
+            cuda: '12.1.1'
+          - os: 'ubuntu-22.04'
+            cuda: '12.2.2'
+          - os: 'ubuntu-22.04'
+            cuda: '12.3.2'
+          - os: 'ubuntu-22.04'
+            cuda: '12.5.1'
+          - os: 'ubuntu-22.04'
+            cuda: '12.6.2'
+    defaults:
+      run:
+        shell: pwsh
+    env:
+        CUDAVER: ${{ matrix.cuda }}
+        PCKGVER: ${{ inputs.version }}
+        FLASH_ATTENTION_REPO: "https://github.com/Dao-AILab/flash-attention.git"
+
+    steps:
+      - name: Checkout this repository
+        uses: actions/checkout@v4
+
+      - name: Clone flash-attention repository
+        run: |
+          git clone --depth 1 --branch ${{ inputs.version }} ${{ env.FLASH_ATTENTION_REPO }} flash-attention-src
+          cd flash-attention-src
+          git submodule update --init --recursive
+
+      - name: Install VS2022 BuildTools 17.9.7
+        run: choco install -y visualstudio2022buildtools --version=117.9.7.0 --params "--add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --installChannelUri https://aka.ms/vs/17/release/180911598_-255012421/channel"
+        if: runner.os == 'Windows'
+
+      - name: Install Windows CUDA ${{ matrix.cuda }}
+        uses: Jimver/cuda-toolkit@v0.2.23
+        id: cuda-toolkit-win
+        with:
+          cuda: "${{ matrix.cuda }}"
+          method: "network"
+          sub-packages: '["nvcc", "cudart", "cublas", "cufft", "curand", "cusolver", "cusparse", "visual_studio_integration"]'
+        if: runner.os == 'Windows'
+
+      # From FA2 repo
+      - name: Install Linux CUDA ${{ matrix.cuda }}
+        uses: Jimver/cuda-toolkit@v0.2.23
+        id: cuda-toolkit-Linux
+        with:
+          cuda: "${{ matrix.cuda }}"
+          linux-local-args: '["--toolkit"]'
+          method: "network"
+          sub-packages: '["nvcc"]'
+        if: runner.os != 'Windows'
+
+      - name: Install the latest version of uv and set the python version
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.pyver }}
+
+      - name: Install Dependencies
+        run: |
+          git config --system core.longpaths true
+          $cudaVersion = '${{ matrix.cuda }}'
+          $cudaVersionPytorch = '${{ matrix.cuda }}'.Remove('${{ matrix.cuda }}'.LastIndexOf('.')).Replace('.','')
+          $pytorchIndexUrl = "https://download.pytorch.org/whl/cu$cudaVersionPytorch"
+
+          uv pip install --upgrade build setuptools wheel packaging ninja torch==${{ matrix.torchver }} psutil --extra-index-url $pytorchIndexUrl
+
+      - name: Build Wheel
+        id: build-wheel
+        working-directory: flash-attention-src
+        run: |
+          # --- Spawn the VS shell
+          if ($IsWindows) {
+            Import-Module 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\Tools\Microsoft.VisualStudio.DevShell.dll'
+            Enter-VsDevShell -VsInstallPath 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools' -DevCmdArguments '-arch=x64 -host_arch=x64'
+            $env:DISTUTILS_USE_SDK=1
+          }
+
+          $cudaVersion = $env:CUDAVER.Remove($env:CUDAVER.LastIndexOf('.')).Replace('.','')
+          $packageVersion = $env:PCKGVER.TrimStart('v')
+          
+          $env:CUDA_PATH = $env:CONDA_PREFIX
+          $env:CUDA_HOME = $env:CONDA_PREFIX
+          
+          $env:MAX_JOBS = '1'
+          $env:FLASH_ATTENTION_FORCE_BUILD = 'TRUE'
+          $env:FLASH_ATTENTION_FORCE_CXX11_ABI = 'FALSE'
+          $env:BUILD_TARGET = "cuda"
+
+          python setup.py bdist_wheel --dist-dir=dist
+          
+          $wheel = (gi '.\dist\*.whl')[0]
+          $wheelname = $wheel.name.replace("flash_attn-$packageVersion-","flash_attn-$packageVersion+cu$cudaVersion"+"torch${{ matrix.torchver }}cxx11abiFALSE-")
+          Move-Item $wheel.fullname ".\dist\$wheelname"
+
+      - name: Upload files to a GitHub release
+        uses: svenstaro/upload-release-action@2.6.1
+        continue-on-error: true
+        with:
+          file: ./flash-attention-src/dist/*.whl
+          tag: ${{ inputs.version }}
+          file_glob: true
+          overwrite: true
+          release_name: Flash Attention ${{ inputs.version }} Wheels
+          body: |
+            Pre-built wheels for flash-attention ${{ inputs.version }}
+            
+            Built with:
+            - OS: ${{ matrix.os }}
+            - Python: ${{ matrix.pyver }}
+            - CUDA: ${{ matrix.cuda }}
+            - PyTorch: ${{ matrix.torchver }}
+            
+            Source: https://github.com/Dao-AILab/flash-attention/tree/${{ inputs.version }}
