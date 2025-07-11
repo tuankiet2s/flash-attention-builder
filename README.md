@@ -1,32 +1,65 @@
 # Flash Attention Builder
 
-This repository builds flash-attention wheels for various CUDA and PyTorch combinations from the official [Dao-AILab/flash-attention](https://github.com/Dao-AILab/flash-attention) repository.
+Build flash-attention wheels for any CUDA and PyTorch combination from the official [Dao-AILab/flash-attention](https://github.com/Dao-AILab/flash-attention) repository.
 
-## Features
+## 🎯 Features
 
-- Builds from official flash-attention repository
-- Supports multiple CUDA versions: 11.8, 12.1, 12.2, 12.3, 12.4, 12.5, 12.6, 12.8
-- Supports multiple PyTorch versions: 2.0.1 through 2.7.0
-- Supports Python 3.9 through 3.12
-- Builds for both Windows and Linux
-- Automatically uploads to GitHub releases
+- ✅ **One Click Building** - Simple dropdown inputs
+- ✅ **CUDA Selection** - Choose from 11.8 to 12.8 versions  
+- ✅ **Multi-Platform** - Windows & Linux builds
+- ✅ **Auto Release** - Wheels uploaded to GitHub releases
+- ✅ **Proper Naming** - Includes CUDA & PyTorch versions
 
-## Usage
+## 🚀 Usage
 
-1. Go to **Actions** tab
-2. Select "Build flash-attention Wheels from Official Repo"
-3. Click "Run workflow"
-4. Enter the flash-attention version tag (e.g., `v2.6.3`)
-5. Click "Run workflow"
+1. Go to **[Actions](https://github.com/tuankiet2s/flash-attention-builder/actions)** tab
+2. Click **"Flash Attention Builder"**
+3. Click **"Run workflow"**
+4. Select options:
+   - **Version**: Flash attention tag (e.g., `v2.6.3`)
+   - **CUDA**: Pick from dropdown (11.8.0 to 12.8.1)
+5. Click **"Run workflow"**
 
-## Testing
+## 📊 Build Matrix
 
-Use the "Test Flash Attention Build (Small Matrix)" workflow to test the build process with a minimal matrix before running the full build.
+**Per run, builds for:**
+- 🐍 **Python**: 3.10, 3.11, 3.12
+- 🔥 **PyTorch**: 2.4.1, 2.5.1, 2.6.0  
+- 💻 **OS**: Ubuntu + Windows (Windows has fewer combinations)
+- **Total**: ~12-14 wheel variants per CUDA version
 
-## Built Wheels
+## 📦 Download Wheels
 
-Pre-built wheels are available in the [Releases](https://github.com/tuankiet2s/flash-attention-builder/releases) section.
+Built wheels are available in [Releases](https://github.com/tuankiet2s/flash-attention-builder/releases):
 
-## Source
+```bash
+# Example wheel names:
+flash_attn-2.6.3+cu124torch2.5.1-cp310-cp310-linux_x86_64.whl
+flash_attn-2.6.3+cu124torch2.6.0-cp311-cp311-win_amd64.whl
+```
 
-Built from: https://github.com/Dao-AILab/flash-attention 
+## 📋 Installation
+
+```bash
+# Download the wheel for your setup and install:
+pip install flash_attn-2.6.3+cu124torch2.5.1-cp310-cp310-linux_x86_64.whl
+
+# Or use GitHub CLI:
+gh release download v2.6.3-builds --repo tuankiet2s/flash-attention-builder
+pip install flash_attn-*.whl
+```
+
+## ⚡ Quick Test
+
+Test with GitHub CLI:
+```bash
+gh workflow run "Flash Attention Builder" \
+  --repo tuankiet2s/flash-attention-builder \
+  -f version=v2.6.3 \
+  -f cuda_version=12.4.1
+```
+
+## 🔍 Source
+
+- **Built from**: [Dao-AILab/flash-attention](https://github.com/Dao-AILab/flash-attention)
+- **Supports**: All official flash-attention releases 
