@@ -1,0 +1,159 @@
+name: Flash Attention Builder
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Flash Attention version tag'
+        default: 'v2.6.3'
+        required: true
+        type: string
+      cuda_version:
+        description: 'CUDA version'
+        required: true
+        default: '12.4.1'
+        type: choice
+        options:
+          - '11.8.0'
+          - '12.1.1'
+          - '12.2.2'
+          - '12.3.2'
+          - '12.4.1'
+          - '12.5.1'
+          - '12.6.2'
+          - '12.8.1'
+
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build FA ${{ inputs.version }} CUDA ${{ inputs.cuda_version }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-2022]
+        python: ["3.10", "3.11", "3.12"]
+        torch: ["2.4.1", "2.5.1", "2.6.0"]
+        exclude:
+          # Reduce Windows combinations
+          - os: windows-2022
+            python: "3.12"
+          - os: windows-2022
+            torch: "2.4.1"
+        
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Clone Flash Attention ${{ inputs.version }}
+        shell: bash
+        run: |
+          git clone --depth 1 --branch ${{ inputs.version }} https://github.com/Dao-AILab/flash-attention.git fa-src
+          cd fa-src
+          git submodule update --init --recursive
+          echo "✅ Cloned Flash Attention ${{ inputs.version }}"
+
+      - name: Setup Python ${{ matrix.python }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: Install CUDA ${{ inputs.cuda_version }} (Windows)
+        if: runner.os == 'Windows'
+        uses: Jimver/cuda-toolkit@v0.2.23
+        with:
+          cuda: ${{ inputs.cuda_version }}
+          method: network
+          sub-packages: '["nvcc", "cudart", "cublas", "visual_studio_integration"]'
+
+      - name: Install CUDA ${{ inputs.cuda_version }} (Linux)
+        if: runner.os == 'Linux'
+        uses: Jimver/cuda-toolkit@v0.2.23
+        with:
+          cuda: ${{ inputs.cuda_version }}
+          method: network
+          sub-packages: '["nvcc"]'
+
+      - name: Install PyTorch ${{ matrix.torch }}
+        shell: bash
+        run: |
+          cudaVersion="${{ inputs.cuda_version }}"
+          cudaShort=$(echo $cudaVersion | sed 's/\.[^.]*$//' | sed 's/\.//g')
+          echo "Installing PyTorch ${{ matrix.torch }} for CUDA $cudaShort"
+          pip install torch==${{ matrix.torch }} --index-url https://download.pytorch.org/whl/cu$cudaShort
+
+      - name: Install Build Dependencies
+        shell: bash
+        run: |
+          pip install ninja packaging wheel setuptools build psutil
+
+      - name: Verify Environment
+        shell: bash
+        run: |
+          echo "=== Environment Check ==="
+          python -c "import torch; print(f'✅ PyTorch: {torch.__version__}'); print(f'✅ CUDA available: {torch.cuda.is_available()}')"
+          nvcc --version || echo "⚠️ NVCC not found"
+
+      - name: Build Flash Attention
+        shell: bash
+        working-directory: fa-src
+        run: |
+          echo "=== Building Flash Attention ==="
+          export MAX_JOBS=2
+          export FLASH_ATTENTION_FORCE_BUILD=TRUE
+          export FLASH_ATTENTION_FORCE_CXX11_ABI=FALSE
+          export BUILD_TARGET=cuda
+          
+          python setup.py bdist_wheel --dist-dir=dist
+          
+          echo "=== Build Complete ==="
+          ls -la dist/
+          
+          # Rename wheel with CUDA and PyTorch info
+          cd dist
+          for wheel in *.whl; do
+            if [ -f "$wheel" ]; then
+              version=$(echo "${{ inputs.version }}" | sed 's/^v//')
+              cuda_short=$(echo "${{ inputs.cuda_version }}" | sed 's/\.[^.]*$//' | sed 's/\.//g')
+              new_name=$(echo "$wheel" | sed "s/flash_attn-$version-/flash_attn-$version+cu${cuda_short}torch${{ matrix.torch }}-/")
+              mv "$wheel" "$new_name"
+              echo "✅ Renamed: $wheel -> $new_name"
+            fi
+          done
+
+      - name: Upload Wheel Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flash-attn-${{ inputs.version }}-${{ matrix.os }}-py${{ matrix.python }}-cuda${{ inputs.cuda_version }}-torch${{ matrix.torch }}
+          path: fa-src/dist/*.whl
+          retention-days: 30
+
+      - name: Upload to Release
+        uses: svenstaro/upload-release-action@2.6.1
+        continue-on-error: true
+        with:
+          file: fa-src/dist/*.whl
+          tag: ${{ inputs.version }}-builds
+          file_glob: true
+          overwrite: true
+          release_name: "Flash Attention ${{ inputs.version }} Wheels"
+          body: |
+            ## Flash Attention ${{ inputs.version }} Pre-built Wheels
+            
+            **Build Configuration:**
+            - 🏷️ Version: `${{ inputs.version }}`
+            - 🔧 CUDA: `${{ inputs.cuda_version }}`
+            - 🐍 Python: `${{ matrix.python }}`
+            - 🔥 PyTorch: `${{ matrix.torch }}`
+            - 💻 OS: `${{ matrix.os }}`
+            
+            **Installation:**
+            ```bash
+            pip install <wheel_name>
+            ```
+            
+            **Source:** [flash-attention ${{ inputs.version }}](https://github.com/Dao-AILab/flash-attention/tree/${{ inputs.version }}) 
