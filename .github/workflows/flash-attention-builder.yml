@@ -23,7 +23,6 @@ on:
           - '12.6.2'
           - '12.8.1'
 
-
 permissions:
   contents: write
 
@@ -43,19 +42,27 @@ jobs:
             python: "3.12"
           - os: windows-2022
             torch: "2.4.1"
-        
     
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Enable Git Long Paths (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          git config --global core.longpaths true
+          git config --global core.autocrlf false
+
       - name: Clone Flash Attention ${{ inputs.version }}
         shell: bash
         run: |
+          echo "Cloning flash-attention ${{ inputs.version }}..."
+          git config --global core.longpaths true
           git clone --depth 1 --branch ${{ inputs.version }} https://github.com/Dao-AILab/flash-attention.git fa-src
           cd fa-src
-          git submodule update --init --recursive
-          echo "✅ Cloned Flash Attention ${{ inputs.version }}"
+          echo "Updating submodules..."
+          git submodule update --init --recursive --depth 1
+          echo "✅ Successfully cloned Flash Attention ${{ inputs.version }}"
 
       - name: Setup Python ${{ matrix.python }}
         uses: actions/setup-python@v4
@@ -91,6 +98,12 @@ jobs:
         run: |
           pip install ninja packaging wheel setuptools build psutil
 
+      - name: Install Additional Dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
       - name: Verify Environment
         shell: bash
         run: |
@@ -103,11 +116,21 @@ jobs:
         working-directory: fa-src
         run: |
           echo "=== Building Flash Attention ==="
-          export MAX_JOBS=2
+          export MAX_JOBS=1
           export FLASH_ATTENTION_FORCE_BUILD=TRUE
           export FLASH_ATTENTION_FORCE_CXX11_ABI=FALSE
           export BUILD_TARGET=cuda
           
+          # Set paths for CUDA
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+            export CUDA_PATH="$CUDA_PATH"
+            export CUDA_HOME="$CUDA_PATH"
+          else
+            export CUDA_PATH="$CONDA_PREFIX"
+            export CUDA_HOME="$CONDA_PREFIX"
+          fi
+          
+          echo "Building with MAX_JOBS=1 to avoid memory issues..."
           python setup.py bdist_wheel --dist-dir=dist
           
           echo "=== Build Complete ==="
